@@ -1,0 +1,764 @@
+--AUTHOR-Umakant Yadav
+
+
+
+
+Drop table if EXISTS #linterface_Temp
+Drop table if EXISTS #pqulifylreson_temp
+Drop table if EXISTS #Drules_temp
+Drop table if EXISTS #Dlreasoncod_temp
+Declare @fico varchar(5)
+Declare @fico_p varchar(5)
+Declare @fico_co varchar(5)
+Declare @preid varchar(30)
+Declare @xmlresponse xml
+Declare @AppPull varchar(2)
+Declare @ApplicationId varchar(30)
+Declare @column varchar(30)
+Declare @date datetime
+set @date='2019-12-27 00:00:00.000'---Provide date on which letter is genrated
+
+
+SELECT  LetterTemplateIDDesc,l.APPId,l.ApplicationNumber,l.ApplicantType,l.lreason1,
+l.llreason,
+l.lreason3,
+l.lreason4,
+l.lreason5,
+l.lreasonDescription,
+l.D_lreason_cod1,
+l.D_lreason_cod2,
+l.D_lreason_cod3,
+l.D_lreason_cod4,
+l.D_lreason_cod5,
+l.CreditBureauScore,
+l.Credit_ScoreCoOwner,
+l.Credit_Score,
+l.Credit_Score_Date,l.CustAddressLine1,l.CustAddressLine2	,l.CustAddressLine3	,l.CustCity	,l.CustState	,l.CustZipcod	,l.CustCountry,
+l.CustFName,l.CustLName,l.FirstNameCoOwner,l.lastNameCoOwner,l.CityCoOwner,l.StateCoOwner,l.PostalcodCoOwner,l.letterstatus,
+
+
+apd.PriFIRSTNAME,
+apd.PriMIDDLENAME,
+apd.PriLASTNAME,
+apd.COA_MiddleName,
+apd.COA_FirstName,
+apd.COA_LastName,
+apd.PriCITY,
+apd.PriSTATE,
+apd.PriZIPcod,
+apd.COA_City,
+apd.COA_State,
+apd.COA_ZIP,
+apd.AddressLine1,
+apd.COA_CAPStreetAddLine1,
+apd.COA_CAPStreetAddLine2,
+apd.CityAS,
+apd.StateAS,
+apd.ZipAS,
+apd.StreetAddressAS,
+apd.CityCAS,
+apd.StateCAS,
+apd.ZipCAS,
+apd.StreetAddressCAS,
+
+apd.preid,apd.AppPull
+into #linterface_Temp FROM M_CI..linterface  l WITH(NOLOCK) 
+ left join Syn_Capp_Applicationinputdata apd on l.ApplicationNumber=apd.Applicationid
+ 
+ 
+where LetterDraftedDate > @date-1 AND LetterDraftedDate < @date 
+AND LetterTemplateIDDesc = 'L1203-AAN_Decline' and l.letterstatus in(2,0)
+  order by LetterID desc
+
+
+
+Select * into #pqulifylreson_temp  from M_CoreApp..pqulifylreson with(nolock) where preid in (select APPId from #linterface_Temp where apppull=1)
+
+Select * into #Drules_temp  from M_CoreApp..Drules with(nolock) where ApplicationId in (select APPId from #linterface_Temp where apppull=2)
+
+select  * into #Dlreasoncod_temp  from M_CoreApp..Dlreasoncod with(nolock)
+
+ALTER TABLE #linterface_Temp ADD db_Fico varchar(5), processed int not null default 0,id int  identity  (1,1),
+db_lreason1 varchar(100),db_llreason varchar(100),db_lreason3 varchar(100),db_lreason4 varchar(100),db_lreason5 varchar(100),
+db_D_lreason_cod1 varchar(100) ,
+db_D_lreason_cod2 varchar(100),
+db_D_lreason_cod3 varchar(100),
+db_D_lreason_cod4 varchar(100),
+db_D_lreason_cod5 varchar(100)
+
+
+
+
+
+
+declare @id int 
+
+ while exists (select top 1 1  from #linterface_Temp where processed=0)
+
+	BEGIN
+	
+	select top 1 @AppPull=apppull,@id=id from #linterface_Temp where processed=0
+	
+	If(@AppPull=1)
+				Begin
+				--For Fico validaton
+				
+				
+			select top 1 @preid=APPId from #linterface_Temp where processed=0
+SELECT  @xmlresponse=RESPONSEBODY FROM M_CoreApp..extapilog WITH(NOLOCK) WHERE APINAME='DDETAILS' 
+AND preid = @preid
+		Update #linterface_Temp set db_fico=
+			(
+
+		SELECT  ISNULL(xmlData.A.value ('(./fico/text())[1]', 'varchar(MAX)'), '')   
+		
+		FROM @xmlresponse.nodes ('DDetails/applicant ') xmlData (A)
+	)  where  preid=@preid
+	
+	
+	
+--For Bottom bullet
+Drop table if EXISTS #bottombullet
+Select * into #bottombullet from #pqulifylreson_temp plr with(nolock) 
+Join M_CI..clookup cl with(nolock) on plr.ApplicationIdcod=cl.lutcod Where 
+plr.preid = @preid and 
+plr.Flag=1 and cl.lutid='ficolreason' order by DisplayOrdr
+
+
+--select * from #bottombullet
+
+--As 'Too many inquiries within the past 12 months' id different in lookup
+update #bottombullet set LutDescription='Too many inquiries within the past 12 months' where LutDescription='Too many inquiries last 12 months'                                       
+
+
+
+	update #linterface_Temp
+	 set db_lreason1=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet) sub WHERE RowNum = 1),''),
+	  db_llreason=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet) sub WHERE RowNum = 2),''),
+	  db_lreason3=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet) sub WHERE RowNum = 3),''),
+	  db_lreason4=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet) sub WHERE RowNum = 4),'')
+	   where APPId=@preid
+	   
+	  if((select COUNT(1) from  #pqulifylreson_temp plr with(nolock)  where ApplicationIdcod='Y' and preid=@preid)>=1)
+	   update #linterface_Temp set  db_lreason5='Too many inquiries in the past 12 months' where APPId=@preid
+	 
+	
+	------Gds varification--------------------------
+	Drop table if EXISTS #Topbullet
+	Select preid,Flag,drc.Description,Priority
+	 into #Topbullet from #pqulifylreson_temp plr with(nolock) 
+	Join #Dlreasoncod_temp drc with(nolock) on plr.ApplicationIdcod=drc.GDScod where preid=@preid and Flag=2 and drc.ApplicantType=1     
+           Group by drc.Description,Priority,preid,Flag  order by drc.Priority
+            
+            
+	--Select * from #Topbullet
+	
+	
+	update #linterface_Temp
+	 set db_D_lreason_cod1=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet) sub WHERE RowNum = 1), 
+	 db_D_lreason_cod2=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet) sub WHERE RowNum = 2), 
+	 db_D_lreason_cod3=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet) sub WHERE RowNum = 3), 
+	 db_D_lreason_cod4=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet) sub WHERE RowNum = 4), 
+     db_D_lreason_cod5=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet) sub WHERE RowNum = 5)
+	where APPId=@preid
+	
+	
+	
+	------Gds001  condition---------------------
+	
+	
+	if((select COUNT(1) from #pqulifylreson_temp where preid=@preid and ApplicationIdcod='GDS001')>=1)
+	begin
+	if((select COUNT(1) from #bottombullet)=0)
+	begin
+	
+	update #linterface_Temp
+	set db_lreason1='Credit score factors not available' where APPId=@preid
+	
+	
+	if((select db_D_lreason_cod1 from #linterface_Temp where preid=@preid)is null)
+	update #linterface_Temp
+	set db_D_lreason_cod1='Credit score factors not available' where APPId=@preid
+	
+	
+	end
+	
+	
+	--putting bottom bullet to top bullet in case of gds001--------------------------
+	Else 
+	Begin
+	
+	
+set @column=(
+SELECT 
+ CASE WHEN db_D_lreason_cod1 IS null THEN 'Col1'
+      WHEN db_D_lreason_cod2 IS null THEN 'Col2'
+      WHEN db_D_lreason_cod3 IS null THEN 'Col3'
+      WHEN db_D_lreason_cod4 IS null THEN 'Col4'
+      ELSE 'NONE'
+END from #linterface_Temp where preid=@preid)
+
+if(@column='Col1')
+begin
+update #linterface_Temp
+					set db_D_lreason_cod1= lreason1,
+						db_D_lreason_cod2= llreason ,
+						db_D_lreason_cod3=lreason3 ,
+						db_D_lreason_cod4=lreason4 
+							where preid=@preid
+end
+if(@column='Col2')
+begin
+update #linterface_Temp
+							set db_D_lreason_cod2=lreason1,
+							db_D_lreason_cod3=llreason ,
+							db_D_lreason_cod4=lreason3 
+								where preid=@preid
+end
+	if(@column='Col3')
+begin							
+		update #linterface_Temp set db_D_lreason_cod3=lreason1,db_D_lreason_cod4=llreason where preid=@preid
+end
+	if(@column='Col4')
+begin		
+	update #linterface_Temp
+					set db_D_lreason_cod4=lreason1 
+					where preid=@preid
+end
+					
+end
+	
+		
+		
+	
+	end--end of Gds001  condition-
+	
+		Else If((select COUNT(1) from #pqulifylreson_temp where preid=@preid and Flag=1 and ApplicationIdcod<>'' )=0)
+		begin
+		update #linterface_Temp
+			set db_lreason1='No Credit File' where APPId=@preid
+			if((select count(1) from #linterface_Temp where APPId=@preid and db_D_lreason_cod1 is null)=1)
+			begin
+			update #linterface_Temp set db_D_lreason_cod1='No Credit File' where APPId=@preid
+			end
+		end
+		
+		
+		
+	End---Prequal condition end
+
+Else If(@AppPull=2)
+	
+	
+	Begin
+
+	
+		
+			select top 1 @ApplicationId=APPId,@id=id from #linterface_Temp where processed=0
+			
+			
+			--For Fico validaton
+SELECT  @xmlresponse=RESPONSEBODY FROM M_CoreApp..extapilog WITH(NOLOCK) WHERE APINAME='DDETAILS' 
+AND ApplicationId = @ApplicationId
+		Update #linterface_Temp set db_fico=
+			(
+
+		SELECT  ISNULL(xmlData.A.value ('(./fico/text())[1]', 'varchar(MAX)'), '')   
+		
+		FROM @xmlresponse.nodes ('DDetails/applicant ') xmlData (A)
+	)  where  APPId=@ApplicationId and id=@id
+
+	select @fico_p=db_fico from #linterface_Temp where  APPId=@ApplicationId and id=@id
+
+
+	--------Coapplicant fico-------------------------------------
+
+
+	SELECT  @xmlresponse=RESPONSEBODY FROM M_CoreApp..extapilog WITH(NOLOCK) WHERE APINAME='DDETAILS' 
+AND ApplicationId = @ApplicationId
+	set @fico_co=ISNULL(
+			(
+
+		SELECT  ISNULL(xmlData.A.value ('(./fico/text())[1]', 'varchar(MAX)'), '')   
+		
+		FROM @xmlresponse.nodes ('DDetails/coApplicant ') xmlData (A)
+	),0)
+
+	
+	
+	
+
+------Gds varification for hardpull for primary applicant--------------------------
+if((select  ApplicantType from #linterface_Temp where APPId=@ApplicationId and id=@id)='Primary')
+Begin
+
+-----For hardpull Bottom bullet---------------------
+
+Drop table if EXISTS #bottombullet2
+Select * into #bottombullet2 from #Drules_temp dgr with(nolock) 
+Join M_CI..clookup cl with(nolock) on dgr.GDSRule=cl.lutcod Where 
+dgr.ApplicationId = @ApplicationId and 
+dgr.Flag=1 and dgr.DRuleType='PA' and cl.lutid='ficolreason' order by DisplayOrdr 
+
+
+--select * from #Drules_temp
+
+--select * from #bottombullet2
+
+--As 'Too many inquiries within the past 12 months' id different in lookup
+update #bottombullet2 set LutDescription='Too many inquiries within the past 12 months' where LutDescription='Too many inquiries last 12 months'                                       
+
+
+
+	update #linterface_Temp
+	 set db_lreason1=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet2) sub WHERE RowNum = 1),''),
+	  db_llreason=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet2) sub WHERE RowNum = 2),''),
+	  db_lreason3=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet2) sub WHERE RowNum = 3),''),
+	  db_lreason4=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet2) sub WHERE RowNum = 4),'')
+	   where APPId=@ApplicationId and id=@id
+	   
+	  if((select COUNT(1) from  #Drules_temp with(nolock)  where GDSRule='Y' and Applicationid=@ApplicationId and DRuleType='PA')>=1)
+	   update #linterface_Temp set  db_lreason5='Too many inquiries in the past 12 months' where APPId=@ApplicationId and id=@id
+
+	   
+	   ---end of bottom bullet-----------------
+
+
+
+	Drop table if EXISTS #Topbullet2
+	Select ApplicationId,Flag,drc.Description,Priority
+	 into #Topbullet2 from #Drules_temp dgr with(nolock) 
+	 Join .#Dlreasoncod_temp drc with(nolock) on dgr.GDSRule=drc.GDScod where applicationid=@ApplicationId and Flag=2 and (dgr.DRuleType='PA' or   dgr.DRuleType='Both' ) and ApplicantType=1
+           Group by drc.Description,Priority,ApplicationId,Flag  order by drc.Priority
+            
+       --select * from    #Drules_temp  where applicationid='8002205780' 
+	--Select * from #Topbullet2
+	--Select top 10 * from  #Dlreasoncod_temp drc with(nolock) where GDScod='GDS015'
+	
+	
+	update #linterface_Temp
+	 set db_D_lreason_cod1=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet2) sub WHERE RowNum = 1), 
+	 db_D_lreason_cod2=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet2) sub WHERE RowNum = 2), 
+	 db_D_lreason_cod3=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet2) sub WHERE RowNum = 3), 
+	 db_D_lreason_cod4=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet2) sub WHERE RowNum = 4), 
+     db_D_lreason_cod5=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet2) sub WHERE RowNum = 5)
+	where APPId=@ApplicationId and id=@id
+
+
+	------Gds001  condition---------------------
+	
+	
+	if((select COUNT(1) from #Drules_temp   where applicationid=@ApplicationId and GDSRule='GDS001')>=1)
+	begin
+	if((select COUNT(1) from #bottombullet2)=0)
+	begin
+	
+	update #linterface_Temp
+	set db_lreason1='Credit score factors not available' where APPId=@ApplicationId and id=@id
+	
+	
+	if((select db_D_lreason_cod1 from #linterface_Temp where APPId=@ApplicationId and id=@id)is null)
+	update #linterface_Temp
+	set db_D_lreason_cod1='Credit score factors not available' where APPId=@ApplicationId and id=@id
+	
+	
+	end
+	
+	
+	--putting bottom bullet to top bullet in case of gds001--------------------------
+	Else 
+	Begin
+	
+	
+set @column=(
+SELECT 
+ CASE WHEN db_D_lreason_cod1 IS null THEN 'Col1'
+      WHEN db_D_lreason_cod2 IS null THEN 'Col2'
+      WHEN db_D_lreason_cod3 IS null THEN 'Col3'
+      WHEN db_D_lreason_cod4 IS null THEN 'Col4'
+      ELSE 'NONE'
+END from #linterface_Temp where APPId=@ApplicationId and id=@id)
+
+if(@column='Col1')
+begin
+update #linterface_Temp
+					set db_D_lreason_cod1= lreason1,
+						db_D_lreason_cod2= llreason ,
+						db_D_lreason_cod3=lreason3 ,
+						db_D_lreason_cod4=lreason4 
+							where  APPId=@ApplicationId and id=@id
+end
+if(@column='Col2')
+begin
+update #linterface_Temp
+							set db_D_lreason_cod2=lreason1,
+							db_D_lreason_cod3=llreason ,
+							db_D_lreason_cod4=lreason3 
+								where  APPId=@ApplicationId and id=@id
+end
+	if(@column='Col3')
+begin							
+		update #linterface_Temp set db_D_lreason_cod3=lreason1,db_D_lreason_cod4=llreason where  APPId=@ApplicationId and id=@id
+end
+	if(@column='Col4')
+begin		
+	update #linterface_Temp
+					set db_D_lreason_cod4=lreason1 
+					where  APPId=@ApplicationId and id=@id
+end
+					
+end
+	
+		
+		
+	
+	end--end of Gds001  condition-
+	
+		Else If((select COUNT(1) from #Drules_temp where ApplicationId=@ApplicationId and Flag=1 and GDSRule<>'' )=0)
+		begin
+		update #linterface_Temp
+			set db_lreason1='No Credit File',
+			db_D_lreason_cod1='No Credit File' where  APPId=@ApplicationId and id=@id
+			if((select count(1) from #linterface_Temp where APPId=@ApplicationId and id=@id and db_D_lreason_cod1 is null )=1)
+			update #linterface_Temp set db_D_lreason_cod1='No Credit File' where APPId=@preid
+		end
+
+
+		----bottom all end----
+
+
+
+	
+	end---end of applicant
+------coapplicant
+
+/*	
+	SELECT TOP 1 *
+FROM (
+  SELECT TOP 2 * 
+  FROM yourTable
+  ORDER BY ID
+) z
+ORDER BY ID DESC*/
+
+	------Gds varification for hardpull for COApplicant --------------------------
+	if((SELECT ApplicantType FROM  #linterface_Temp  where APPId=@ApplicationId and id=@id )='COApplicant' )
+	Begin
+
+	-----For hardpull Bottom bullet---------------------
+
+Drop table if EXISTS #bottombullet3
+Select * into #bottombullet3 from #Drules_temp dgr with(nolock) 
+Join M_CI..clookup cl with(nolock) on dgr.GDSRule=cl.lutcod Where 
+dgr.ApplicationId = @ApplicationId and 
+dgr.Flag=1 and dgr.DRuleType='CA' and cl.lutid='ficolreason' order by DisplayOrdr 
+
+
+--select * from #Drules_temp
+
+--select * from #bottombullet2
+
+--As 'Too many inquiries within the past 12 months' id different in lookup
+update #bottombullet3 set LutDescription='Too many inquiries within the past 12 months' where LutDescription='Too many inquiries last 12 months'                                       
+
+
+
+	update #linterface_Temp
+	 set db_lreason1=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet3) sub WHERE RowNum = 1),''),
+	  db_llreason=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet3) sub WHERE RowNum = 2),''),
+	  db_lreason3=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet3) sub WHERE RowNum = 3),''),
+	  db_lreason4=isnull((SELECT LutDescription FROM (SELECT ROW_NUMBER () OVER (ORDER BY DisplayOrdr) AS RowNum,*FROM #bottombullet3) sub WHERE RowNum = 4),'')
+	   where APPId=@ApplicationId and id=@id
+	   
+	  if((select COUNT(1) from  #Drules_temp with(nolock)  where GDSRule='Y' and Applicationid=@ApplicationId and DRuleType='CA')>=1)
+	   update #linterface_Temp set  db_lreason5='Too many inquiries in the past 12 months' where APPId=@ApplicationId and id=@id
+
+	   
+	   ---end of bottom bullet-----------------
+
+
+	Drop table if EXISTS #Topbullet3
+	Select ApplicationId,Flag,drc.Description,Priority
+	 into #Topbullet3 from #Drules_temp dgr with(nolock) 
+	 Join #Dlreasoncod_temp drc with(nolock) on dgr.GDSRule=drc.GDScod where applicationid=@ApplicationId and Flag=2 and (dgr.DRuleType='CA' or   dgr.DRuleType='Both' ) and ApplicantType=2
+           Group by drc.Description,Priority,ApplicationId,Flag  order by drc.Priority
+            
+       --select * from    #Drules_temp  where applicationid='8002205780' 
+	--Select * from #Topbullet2
+	--Select top 10 * from  M_CoreApp..#Dlreasoncod_temp drc with(nolock) where GDScod='GDS015'
+	
+	
+	update #linterface_Temp
+	 set db_D_lreason_cod1=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet3) sub WHERE RowNum = 1), 
+	 db_D_lreason_cod2=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet3) sub WHERE RowNum = 2), 
+	 db_D_lreason_cod3=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet3) sub WHERE RowNum = 3), 
+	 db_D_lreason_cod4=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet3) sub WHERE RowNum = 4), 
+     db_D_lreason_cod5=(SELECT Description FROM (SELECT ROW_NUMBER () OVER (ORDER BY Priority) AS RowNum,*FROM #Topbullet3) sub WHERE RowNum = 5)
+	where APPId=@ApplicationId and id=@id
+
+	---fico update for coapplicant--
+
+		--For Fico validaton
+SELECT  @xmlresponse=RESPONSEBODY FROM M_CoreApp..extapilog WITH(NOLOCK) WHERE APINAME='DDETAILS' 
+AND ApplicationId = @ApplicationId
+		Update #linterface_Temp set db_fico=
+			(
+
+		SELECT  ISNULL(xmlData.A.value ('(./fico/text())[1]', 'varchar(MAX)'), '')   
+		
+		FROM @xmlresponse.nodes ('DDetails/coApplicant ') xmlData (A)
+	)  where  APPId=@ApplicationId and id=@id
+	select @fico_co=db_fico from #linterface_Temp where  APPId=@ApplicationId and id=@id
+
+
+	--------applicant fico-------------------------------------
+
+
+	SELECT  @xmlresponse=RESPONSEBODY FROM M_CoreApp..extapilog WITH(NOLOCK) WHERE APINAME='DDETAILS' 
+AND ApplicationId = @ApplicationId
+	set @fico_p=ISNULL(
+			(
+
+		SELECT  ISNULL(xmlData.A.value ('(./fico/text())[1]', 'varchar(MAX)'), '')   
+		
+		FROM @xmlresponse.nodes ('DDetails/applicant ') xmlData (A)
+	),0)
+
+
+
+
+
+	------Gds001  condition---------------------
+	
+	
+	if((select COUNT(1) from #Drules_temp   where applicationid=@ApplicationId and GDSRule='GDS001')>=1)
+	begin
+	if((select COUNT(1) from #bottombullet3)=0)
+	begin
+	
+	update #linterface_Temp
+	set db_lreason1='Credit score factors not available' where APPId=@ApplicationId and id=@id
+	
+	
+	if((select db_D_lreason_cod1 from #linterface_Temp where APPId=@ApplicationId and id=@id)is null)
+	update #linterface_Temp
+	set db_D_lreason_cod1='Credit score factors not available' where APPId=@ApplicationId and id=@id
+	
+	
+	end
+	
+	
+	--putting bottom bullet to top bullet in case of gds001--------------------------
+	Else 
+	Begin
+	
+	
+set @column=(
+SELECT 
+ CASE WHEN db_D_lreason_cod1 IS null THEN 'Col1'
+      WHEN db_D_lreason_cod2 IS null THEN 'Col2'
+      WHEN db_D_lreason_cod3 IS null THEN 'Col3'
+      WHEN db_D_lreason_cod4 IS null THEN 'Col4'
+      ELSE 'NONE'
+END from #linterface_Temp where APPId=@ApplicationId and id=@id)
+
+if(@column='Col1')
+begin
+update #linterface_Temp
+					set db_D_lreason_cod1= lreason1,
+						db_D_lreason_cod2= llreason ,
+						db_D_lreason_cod3=lreason3 ,
+						db_D_lreason_cod4=lreason4 
+							where  APPId=@ApplicationId and id=@id
+end
+if(@column='Col2')
+begin
+update #linterface_Temp
+							set db_D_lreason_cod2=lreason1,
+							db_D_lreason_cod3=llreason ,
+							db_D_lreason_cod4=lreason3 
+								where  APPId=@ApplicationId and id=@id
+end
+	if(@column='Col3')
+begin							
+		update #linterface_Temp set db_D_lreason_cod3=lreason1,db_D_lreason_cod4=llreason where  APPId=@ApplicationId and id=@id
+end
+	if(@column='Col4')
+begin		
+	update #linterface_Temp
+					set db_D_lreason_cod4=lreason1 
+					where  APPId=@ApplicationId and id=@id
+end
+					
+end
+	
+		
+		
+	
+	end--end of Gds001  condition-
+	
+		Else If((select COUNT(1) from #Drules_temp where ApplicationId=@ApplicationId and Flag=1 and GDSRule<>'' )=0)
+		begin
+		update #linterface_Temp
+			set db_lreason1='No Credit File',
+			db_D_lreason_cod1='No Credit File' where  APPId=@ApplicationId and id=@id
+		end
+
+
+		----bottom all end----
+
+	end
+	 	
+
+		
+		---------decline due to coapplicant case----------
+	if(@fico_p>=@fico_co)
+	begin
+	update #linterface_Temp set db_D_lreason_cod1='Application Declined due to Co-Applicant''s Application Factors',
+	db_D_lreason_cod2='',db_D_lreason_cod3='',db_D_lreason_cod4='' 
+	 where  APPId=@ApplicationId and ApplicantType='COApplicant'
+	 end 
+	 
+
+	 else if(@fico_co>@fico_p)
+	 begin
+	 update #linterface_Temp set db_D_lreason_cod1='Application Declined due to Co-Applicant''s Application Factors',
+	db_D_lreason_cod2='',db_D_lreason_cod3='',db_D_lreason_cod4='' 
+	 where  APPId=@ApplicationId and ApplicantType='Primary'
+	 end
+	 ---------decline due to coapplicant case end----------
+	
+	
+	End--Hard pull condition end
+
+
+update #linterface_Temp set  processed=1 where processed=0 and id=@id
+
+
+
+
+
+
+
+	END---End of while condition
+	
+select 
+--lreason1,db_lreason1,
+apppull,
+db_D_lreason_cod1 ,D_lreason_cod1,
+db_D_lreason_cod2 ,D_lreason_cod2,
+db_D_lreason_cod3 ,D_lreason_cod3,
+db_D_lreason_cod4 ,D_lreason_cod4,
+db_D_lreason_cod5,db_lreason1,* from #linterface_Temp  --where APPId='1002204637'      
+
+
+select 'Fico not mached' Fico_not_matched,db_Fico,Credit_score,* from #linterface_Temp where db_Fico<>Credit_score
+
+--Bottom bullet check
+select 'lreason1 not preset' lreason_1_not_matched ,lreason1,db_lreason1,
+db_llreason,
+db_lreason3,
+db_lreason4,
+db_lreason5,*  from #linterface_Temp
+Where  (lreason1<>db_lreason1 and  lreason1<>db_llreason and lreason1<>db_lreason3 and lreason1<>db_lreason4)
+
+select 'llreason not preset' lreason_2_not_matched ,llreason,db_lreason1,
+db_llreason,
+db_lreason3,
+db_lreason4,
+db_lreason5,*  from #linterface_Temp
+Where  (llreason<>db_lreason1 and  llreason<>db_llreason and llreason<>db_lreason3 and llreason<>db_lreason4)
+
+select 'lreason3 not preset' lreason_3_not_matched ,lreason3,db_lreason1,
+db_llreason,
+db_lreason3,
+db_lreason4,
+db_lreason5,*  from #linterface_Temp
+Where  (lreason3<>db_lreason1 and  lreason3<>db_llreason and lreason3<>db_lreason3 and lreason3<>db_lreason4)
+
+select 'lreason4 not preset' lreason_4_not_matched ,lreason4,db_lreason1,
+db_llreason,
+db_lreason3,
+db_lreason4,
+db_lreason5,*  from #linterface_Temp
+Where  (lreason4<>db_lreason1 and  lreason4<>db_llreason and lreason4<>db_lreason3 and lreason4<>db_lreason4)
+
+select 'lreason 5 not matched' lreason_5_not_matched ,* from #linterface_Temp where lreason5<>db_lreason5
+
+
+--update #linterface_Temp set db_lreason3='AAAA' WHERE APPId='1002202605'
+/*
+declare @a int
+set @a=4
+while(@a=0)
+begin
+*/
+
+
+----Top bullet validation------
+select 'top bullet 1 not matched' Top_bullet_1_not_matched,db_D_lreason_cod1,D_lreason_cod1,* from #linterface_Temp where isnull(db_D_lreason_cod1,'')<>isnull(D_lreason_cod1,'') 
+select 'top bullet 2 not matched' Top_bullet_2_not_matched,db_D_lreason_cod2,D_lreason_cod2,* from #linterface_Temp where isnull(db_D_lreason_cod2,'')<>isnull(D_lreason_cod2,'') 
+select 'top bullet 3 not matched' Top_bullet_3_not_matched,db_D_lreason_cod3,D_lreason_cod3,* from #linterface_Temp where isnull(db_D_lreason_cod3,'')<>isnull(D_lreason_cod3,'') 
+select 'top bullet 4 not matched' Top_bullet_4_not_matched,db_D_lreason_cod4,D_lreason_cod4,* from #linterface_Temp where isnull(db_D_lreason_cod4,'')<>isnull(D_lreason_cod4,'') 
+
+
+---gsd035 to gds037 check------------
+
+select 'Need to stop these letters' STOP_LETTER,* from #pqulifylreson_temp where ApplicationIdcod in('GDS035','GDS036','GDS037')
+
+
+--select  * from #linterface_Temp where preid='1002203014'
+
+--update #linterface_Temp set D_lreason_cod3='abc' where APPId='1002203077'
+
+
+
+select 'Description not available in Dlreasoncod' Description_not_available_in_Dlreasoncod ,* from #pqulifylreson_temp where Flag=2 and ApplicationIdcod<>'GDS001' and ApplicationIdcod not in (select GDScod from #Dlreasoncod_temp with(nolock))
+
+
+
+-----Name varification------
+select 'Name or address missmatch in letter' Name_Address_missmatch_in_letter, * from #linterface_Temp where PriFIRSTNAME<>isnull(CustFName,'') or PriLASTNAME<>isnull(CustLName,'') or                                                      
+PriCITY<>isnull(CustCity,'') or PriSTATE<>isnull(CustState,'') or PriZIPcod<>isnull(CustZipcod,'') or AddressLine1<>isnull(CustAddressLine1,'')
+
+
+select 'Co_applicant name mismatch in letter' Co_applicant_Address_or_name_mismatch_in_letter, * from #linterface_Temp where (COA_FirstName<>isnull(FirstNameCoOwner,'') or COA_LastName<>isnull(LastNameCoOwner,'') 
+or COA_City<>isnull(CityCoOwner,'') or COA_State<>isnull(StateCoOwner,'') or COA_ZIP<>isnull(PostalcodCoOwner,'')) and ApplicantType='COApplicant'
+
+
+                                
+
+select 'Application status is not decline' Application_status_is_not_decline,* from Syn_Capp_Applicationinputdata with(nolock) where preid in(select preid  from #linterface_Temp where apppull=1) and PrequelStatus<>2
+
+--select top 20 * from #Drules_temp where ApplicationId='8002207356     '
+
+
+--select top 20 * from M_Coreapp..Drules where ApplicationId='8002208725          '    
+
+--select * from #linterface_Temp
+select  'Application status is not decline' Application_status_is_not_decline,* from M_Coreapp..ApplicationFlowStatus with(nolock) where ApplicationId in ( select ApplicationNumber from #linterface_Temp where apppull=2) and Status<>2
+
+
+--select * from #pqulifylreson_temp where preid='1002202313'
+
+select 'DDetails not present in extapilog' DDetails_not_present_in_extapilog ,* from #linterface_Temp where apppull=1 and APPId not in (
+select preid from M_Coreapp..extapilog with (nolock) where ApiName='DDetails' and preid in 
+(select APPId from #linterface_Temp where apppull=1))
+
+
+select 'DDetails not present in extapilog' DDetails_not_present_in_extapilog ,* from #linterface_Temp where apppull=2 and APPId not in (
+select  ApplicationId from M_Coreapp..extapilog with (nolock) where ApiName='DDetails' and ApplicationId in 
+(select APPId from #linterface_Temp where apppull=2))
+
+/*
+select *  from M_Coreapp..extapilog with (nolock) where ApiName='DReport' and ApplicationId in (select APPId  from #linterface_Temp where apppull=2 and APPId not in (
+select  ApplicationId from M_Coreapp..extapilog with (nolock) where ApiName='DDetails' and ApplicationId in 
+(select APPId from #linterface_Temp where apppull=2)))
+
+select ApplicationNumber,* from #linterface_Temp where apppull=2 and ApplicationNumber='824936'
+select ApplicationNumber,* from #linterface_Temp 
+
+select *  from M_Coreapp..extapilog with (nolock) where ApiName='DReport' and preid in (select APPId  from #linterface_Temp where apppull=1 and APPId not in (
+select  preid from M_Coreapp..extapilog with (nolock) where ApiName='DDetails' and preid in 
+(select APPId from #linterface_Temp where apppull=1)))
+*/
